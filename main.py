@@ -53,8 +53,8 @@ def get_student_data(user_id):
         reader = csv.reader(f)
         next(reader, None)  # Пропуск заголовка
         for row in reader:
-            if row and int(row[0]) == user_id:
-                return {"fio": row[1], "group": row[2]}
+            if row and int(row) == user_id:
+                return {"fio": row, "group": row}
     return None
 
 # Удаление студента из базы при изменении данных
@@ -68,12 +68,12 @@ def delete_student_data(user_id):
     
     with open(CSV_STUDENTS, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(rows[0])  # Заголовок
+        writer.writerow(rows)  # Заголовок
         for row in rows[1:]:
-            if row and int(row[0]) != user_id:
+            if row and int(row) != user_id:
                 writer.writerow(row)
 
-# Определение текущей пары ДВФУ
+# Определение текущей пары ДВФУ с новыми границами (08:15 - 18:20)
 def get_current_pair_text():
     now_vlad = datetime.now(VLADIVOSTOK_TZ)
     current_time = now_vlad.time()
@@ -83,7 +83,8 @@ def get_current_pair_text():
         end = datetime.strptime(end_str, "%H:%M").time()
         return start <= current_time <= end
 
-    if time_in_range("08:30", "10:00"):
+    # Разрешаем вход с 08:15 на первую пару
+    if time_in_range("08:15", "10:00"):
         return "1 пара"
     elif time_in_range("10:10", "11:40"):
         return "2 пара"
@@ -93,12 +94,11 @@ def get_current_pair_text():
         return "4 пара"
     elif time_in_range("15:10", "16:40"):
         return "5 пара"
+    # 18:20 — финальный конец 6-й пары (на одну пару раньше исходного)
     elif time_in_range("16:50", "18:20"):
         return "6 пара"
-    elif time_in_range("18:30", "20:00"):
-        return "7 пара"
     else:
-        return f"Перемена ({now_vlad.strftime('%H:%M')})"
+        return None  # Отметка закрыта (до 08:15 или после 18:20)
 
 # Клавиатуры
 def get_reg_group_keyboard():
@@ -128,6 +128,19 @@ async def cmd_start(message: Message, state: FSMContext):
         return
 
     pair_status = get_current_pair_text()
+    
+    # Блокировка, если время вышло (после 18:20) или еще не началось (до 08:15)
+    if not pair_status:
+        await message.answer(
+            text=f"👤 **Профиль:** {student['fio']} (Подгруппа {student['group']})\n"
+                 f"🌙 **Статус:** Прием отметок закрыт.\n\n"
+                 f"🔒 Фиксировать присутствие можно только в учебные часы (с 08:15 до 18:20).",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⚙️ Сменить подгруппу / ФИО", callback_data="edit_profile")]
+            ])
+        )
+        return
+
     await message.answer(
         text=f"👤 **Профиль:** {student['fio']} (Подгруппа {student['group']})\n"
              f"🏫 **Текущий слот:** {pair_status}\n\n"
@@ -185,12 +198,24 @@ async def process_reg_group(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     pair_status = get_current_pair_text()
     
+    if not pair_status:
+        await callback.message.edit_text(
+            text=f"🎉 Регистрация успешно завершена!\n\n"
+                 f"👤 Профиль: **{fio}**\n"
+                 f"👥 Подгруппа: **{group_num}**\n\n"
+                 f"🔒 **Отметка сейчас недоступна** (учебное время завершено).",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⚙️ Сменить подгруппу / ФИО", callback_data="edit_profile")]
+            ])
+        )
+        return
+
     await callback.message.edit_text(
         text=f"🎉 Регистрация успешно завершена!\n\n"
-             f"👤 Профиль: **{fio}**\n"
-             f"👥 Подгруппа: **{group_num}**\n"
-             f"🏫 Текущий слот: {pair_status}\n\n"
-             f"Теперь вы можете отмечаться одной большой кнопкой:",
+                 f"👤 Профиль: **{fio}**\n"
+                 f"👥 Подгруппа: **{group_num}**\n"
+                 f"🏫 Текущий слот: {pair_status}\n\n"
+                 f"Теперь вы можете отмечаться одной большой кнопкой:",
         reply_markup=get_attendance_keyboard()
     )
 
@@ -205,6 +230,15 @@ async def process_attendance(callback: CallbackQuery):
         return
 
     pair_status = get_current_pair_text()
+    
+    # Проверка лимита времени в момент клика
+    if not pair_status:
+        await callback.answer("🔒 Время приема отметок вышло (после 18:20)!", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚙️ Сменить подгруппу / ФИО", callback_data="edit_profile")]
+        ]))
+        return
+
     now_vlad = datetime.now(VLADIVOSTOK_TZ)
     date_str = now_vlad.strftime("%Y-%m-%d")
     time_str = now_vlad.strftime("%H:%M:%S")
@@ -226,37 +260,3 @@ async def process_attendance(callback: CallbackQuery):
         reply_markup=get_attendance_keyboard()
     )
 
-# Команда /report с жестким ограничением доступа
-@dp.message(Command("report"))
-async def cmd_report(message: Message):
-    user_username = message.from_user.username
-    
-    # ПРОВЕРКА ДОСТУПА: сверяем текущий юзернейм со старостой
-    if user_username and user_username.lower() == STAROSTA_USERNAME.lower():
-        if os.path.exists(CSV_ATTENDANCE):
-            document = FSInputFile(CSV_ATTENDANCE)
-            await message.answer_document(document, caption="📊 Журнал посещаемости учебной группы")
-        else:
-            await message.answer("Журнал пока пуст. Никто ещё не отметился.")
-    else:
-        await message.answer("🔒 **Доступ ограничен.** Данная команда доступна только старосте группы.")
-
-async def main():
-    await bot.set_my_commands([
-        BotCommand(command="start", description="📍 Отметиться на паре"),
-        BotCommand(command="relogin", description="✍️ Сменить подгруппу или ФИО"),
-        BotCommand(command="report", description="📊 Скачать журнал (Староста)")
-    ])
-
-    app = web.Application()
-    app.router.add_get('/', handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    
-    asyncio.create_task(site.start())
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
