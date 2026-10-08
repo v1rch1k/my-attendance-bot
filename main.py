@@ -5,7 +5,7 @@ import csv
 import os
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -17,7 +17,10 @@ async def handle(request):
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CSV_ATTENDANCE = "attendance.csv"
-CSV_STUDENTS = "students.csv"  # База данных с реальными именами студентов
+CSV_STUDENTS = "students.csv"  # Хранит Telegram ID, ФИО и Подгруппу
+
+# НАСТРОЙКА СТАРОСТЫ
+STAROSTA_USERNAME = "edinoro_g"  # Ваш юзернейм без знака @
 
 # Настройка таймзоны Владивостока (UTC+10) для ДВФУ
 VLADIVOSTOK_TZ = timezone(offset=timedelta(hours=10))
@@ -31,27 +34,44 @@ if not os.path.exists(CSV_ATTENDANCE):
 if not os.path.exists(CSV_STUDENTS):
     with open(CSV_STUDENTS, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(["Telegram ID", "Реальные ФИО"])
+        writer.writerow(["Telegram ID", "Реальные ФИО", "Подгруппа"])
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Состояния для регистрации ФИО
+# Состояния пошаговой регистрации
 class Registration(StatesGroup):
     waiting_for_fio = State()
+    waiting_for_group = State()
 
-# Функция получения реального ФИО по Telegram ID
-def get_student_fio(user_id):
+# Получение данных студента из файла
+def get_student_data(user_id):
     if not os.path.exists(CSV_STUDENTS):
         return None
     with open(CSV_STUDENTS, mode='r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        next(reader, None)  # Пропускаем заголовок
+        next(reader, None)  # Пропуск заголовка
         for row in reader:
             if row and int(row[0]) == user_id:
-                return row[1]
+                return {"fio": row[1], "group": row[2]}
     return None
+
+# Удаление студента из базы при изменении данных
+def delete_student_data(user_id):
+    if not os.path.exists(CSV_STUDENTS):
+        return
+    rows = []
+    with open(CSV_STUDENTS, mode='r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    
+    with open(CSV_STUDENTS, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(rows[0])  # Заголовок
+        for row in rows[1:]:
+            if row and int(row[0]) != user_id:
+                writer.writerow(row)
 
 # Определение текущей пары ДВФУ
 def get_current_pair_text():
@@ -80,85 +100,110 @@ def get_current_pair_text():
     else:
         return f"Перемена ({now_vlad.strftime('%H:%M')})"
 
-def get_group_keyboard():
+# Клавиатуры
+def get_reg_group_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1 подгруппа 👥", callback_data="group_1")],
-        [InlineKeyboardButton(text="2 подгруппа 👥", callback_data="group_2")]
+        [InlineKeyboardButton(text="1 подгруппа 👥", callback_data="reg_group_1")],
+        [InlineKeyboardButton(text="2 подгруппа 👥", callback_data="reg_group_2")]
+    ])
+
+def get_attendance_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📍 Я НА ПАРЕ (ОТМЕТИТЬСЯ)", callback_data="mark_me")],
+        [InlineKeyboardButton(text="⚙️ Сменить подгруппу / ФИО", callback_data="edit_profile")]
     ])
 
 # Команда /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    saved_fio = get_student_fio(user_id)
+    student = get_student_data(user_id)
     
-    # Если студент зашел впервые и его нет в базе — отправляем на регистрацию ФИО
-    if not saved_fio:
+    if not student:
         await message.answer(
-            "👋 Привет! Перед тем как отмечаться на парах, давай зарегистрируемся.\n\n"
-            "Пожалуйста, **введи свои реальные Фамилию и Имя** (например: *Иванов Иван*).\n"
-            "Это нужно, чтобы староста видел тебя в официальном списке группы."
+            "👋 Привет! Пройди быструю регистрацию для журнала старосты.\n\n"
+            "Шаг 1: **Введи Фамилию и Имя** через пробел (например: *Петров Алексей*):"
         )
         await state.set_state(Registration.waiting_for_fio)
         return
 
     pair_status = get_current_pair_text()
     await message.answer(
-        text=f"Привет, {saved_fio}!\n"
-             f"🏫 Текущий слот: {pair_status}\n\n"
-             f"Выбери свою подгруппу для отметки присутствия:",
-        reply_markup=get_group_keyboard()
+        text=f"👤 **Профиль:** {student['fio']} (Подгруппа {student['group']})\n"
+             f"🏫 **Текущий слот:** {pair_status}\n\n"
+             f"Нажмите кнопку ниже, чтобы зафиксировать присутствие:",
+        reply_markup=get_attendance_keyboard()
     )
 
-# Хендлер для сохранения ФИО
+# Обработка команды /relogin и инлайн-кнопки изменения профиля
+@dp.message(Command("relogin"))
+@dp.callback_query(F.data == "edit_profile")
+async def cmd_relogin(event: Message | CallbackQuery, state: FSMContext):
+    user_id = event.from_user.id
+    delete_student_data(user_id)
+    await state.clear()
+    
+    text_msg = "🔄 Данные профиля удалены.\n\nДавай зарегистрируемся заново. **Введи Фамилию и Имя** через пробел:"
+    
+    if isinstance(event, CallbackQuery):
+        await event.message.answer(text_msg)
+        await event.answer()
+    else:
+        await event.answer(text_msg)
+        
+    await state.set_state(Registration.waiting_for_fio)
+
+# Хендлер ввода ФИО
 @dp.message(Registration.waiting_for_fio)
 async def process_fio(message: Message, state: FSMContext):
     fio = message.text.strip()
-    
     if len(fio) < 3 or " " not in fio:
-        await message.answer("❌ Пожалуйста, введи корректные Фамилию и Имя через пробел.")
+        await message.answer("❌ Пожалуйста, введите имя и фамилию через пробел!")
         return
-
-    user_id = message.from_user.id
     
-    # Сохраняем студента в базу данных
-    with open(CSV_STUDENTS, mode='a', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow([user_id, fio])
-        
-    await state.clear()  # Выходим из режима регистрации
-    
-    pair_status = get_current_pair_text()
+    await state.update_data(chosen_fio=fio)
+    await state.set_state(Registration.waiting_for_group)
     await message.answer(
-        text=f"🎉 Регистрация успешна! Бот запомнил тебя как: **{fio}**\n\n"
-             f"🏫 Текущий слот: {pair_status}\n"
-             f"Теперь ты можешь выбрать подгруппу и отметиться:",
-        reply_markup=get_group_keyboard()
+        text=f"Принято: **{fio}**\n\nШаг 2: Выбери свою учебную подгруппу:",
+        reply_markup=get_reg_group_keyboard()
     )
 
-# Команда /report для старосты
-@dp.message(Command("report"))
-async def cmd_report(message: Message):
-    if os.path.exists(CSV_ATTENDANCE):
-        document = FSInputFile(CSV_ATTENDANCE)
-        await message.answer_document(document, caption="📊 Журнал посещаемости с реальными ФИО")
-    else:
-        await message.answer("Журнал пуст. Никто еще не отмечался.")
-
-# Обработка клика по подгруппе
-@dp.callback_query(F.data.startswith("group_"))
-async def process_group(callback: CallbackQuery):
+# Хендлер выбора подгруппы при регистрации
+@dp.callback_query(Registration.waiting_for_group, F.data.startswith("reg_group_"))
+async def process_reg_group(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    group_num = parts[2] if len(parts) > 2 else "1"
+    user_data = await state.get_data()
+    fio = user_data.get("chosen_fio")
     user_id = callback.from_user.id
-    saved_fio = get_student_fio(user_id)
     
-    # Защитная проверка: если каким-то чудом кнопка нажата без регистрации ФИО
-    if not saved_fio:
-        await callback.answer("❌ Сначала отправьте команду /start и введите свои ФИО!", show_alert=True)
+    # Сохраняем в базу студентов
+    with open(CSV_STUDENTS, mode='a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow([user_id, fio, group_num])
+        
+    await state.clear()
+    pair_status = get_current_pair_text()
+    
+    await callback.message.edit_text(
+        text=f"🎉 Регистрация успешно завершена!\n\n"
+             f"👤 Профиль: **{fio}**\n"
+             f"👥 Подгруппа: **{group_num}**\n"
+             f"🏫 Текущий слот: {pair_status}\n\n"
+             f"Теперь вы можете отмечаться одной большой кнопкой:",
+        reply_markup=get_attendance_keyboard()
+    )
+
+# Хендлер нажатия на кнопку «ОТМЕТИТЬ ПРИСУТСТВИЕ»
+@dp.callback_query(F.data == "mark_me")
+async def process_attendance(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    student = get_student_data(user_id)
+    
+    if not student:
+        await callback.answer("❌ Вы не зарегистрированы! Используйте синее меню для перевхода.", show_alert=True)
         return
 
-    parts = callback.data.split("_")
-    group_num = parts[1] if len(parts) > 1 else "Неизвестно"
-    
     pair_status = get_current_pair_text()
     now_vlad = datetime.now(VLADIVOSTOK_TZ)
     date_str = now_vlad.strftime("%Y-%m-%d")
@@ -167,20 +212,42 @@ async def process_group(callback: CallbackQuery):
     username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
     tg_name = callback.from_user.full_name
 
-    # Записываем в таблицу отметку, включая реальные ФИО
     with open(CSV_ATTENDANCE, mode='a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow([date_str, time_str, user_id, username, tg_name, saved_fio, f"Подгруппа {group_num}", pair_status])
+        writer.writerow([date_str, time_str, user_id, username, tg_name, student['fio'], f"Подгруппа {student['group']}", pair_status])
 
     await callback.message.edit_text(
-        text=f"✅ Присутствие успешно отмечено!\n\n"
+        text=f"✅ **Присутствие успешно отмечено!**\n\n"
              f"📅 Дата/Время: {date_str} {time_str} (ВЛВ)\n"
-             f"👥 Подгруппа: {group_num}\n"
-             f"📖 Пара: {pair_status}\n"
-             f"👤 Студент: {saved_fio}"
+             f"👤 Студент: {student['fio']}\n"
+             f"👥 Подгруппа: {student['group']}\n"
+             f"📖 Пара: {pair_status}\n\n"
+             f"Запись внесена в общий файл журнала.",
+        reply_markup=get_attendance_keyboard()
     )
 
+# Команда /report с жестким ограничением доступа
+@dp.message(Command("report"))
+async def cmd_report(message: Message):
+    user_username = message.from_user.username
+    
+    # ПРОВЕРКА ДОСТУПА: сверяем текущий юзернейм со старостой
+    if user_username and user_username.lower() == STAROSTA_USERNAME.lower():
+        if os.path.exists(CSV_ATTENDANCE):
+            document = FSInputFile(CSV_ATTENDANCE)
+            await message.answer_document(document, caption="📊 Журнал посещаемости учебной группы")
+        else:
+            await message.answer("Журнал пока пуст. Никто ещё не отметился.")
+    else:
+        await message.answer("🔒 **Доступ ограничен.** Данная команда доступна только старосте группы.")
+
 async def main():
+    await bot.set_my_commands([
+        BotCommand(command="start", description="📍 Отметиться на паре"),
+        BotCommand(command="relogin", description="✍️ Сменить подгруппу или ФИО"),
+        BotCommand(command="report", description="📊 Скачать журнал (Староста)")
+    ])
+
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
