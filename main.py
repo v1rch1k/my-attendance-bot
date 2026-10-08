@@ -37,7 +37,6 @@ dp = Dispatcher()
 class Registration(StatesGroup):
     waiting_for_fio = State()
     waiting_for_group = State()
-
 def get_student_data(user_id):
     if not os.path.exists(CSV_STUDENTS):
         return None
@@ -89,7 +88,6 @@ def get_attendance_keyboard():
         [InlineKeyboardButton(text="📍 Я НА ПАРЕ (ОТМЕТИТЬСЯ)", callback_data="mark_me")],
         [InlineKeyboardButton(text="⚙️ Сменить подгруппу / ФИО", callback_data="edit_profile")]
     ])
-
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -128,7 +126,7 @@ async def process_fio(message: Message, state: FSMContext):
 @dp.callback_query(Registration.waiting_for_group, F.data.startswith("reg_group_"))
 async def process_reg_group(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
-    group_num = parts[2] if len(parts) > 2 else "1"
+    group_num = parts if len(parts) > 2 else "1"
     user_data = await state.get_data()
     fio = user_data.get("chosen_fio")
     user_id = callback.from_user.id
@@ -175,6 +173,8 @@ async def start_bot():
         BotCommand(command="relogin", description="✍️ Сменить подгруппу или ФИО"),
         BotCommand(command="report", description="📊 Скачать журнал (Староста)")
     ])
+    # ДОБАВЛЕНА СТРОЧКА СБРОСА ВЕБХУКА ПЕРЕД СТАРТОМ
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
