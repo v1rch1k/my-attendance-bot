@@ -53,8 +53,8 @@ def get_student_data(user_id):
         reader = csv.reader(f)
         next(reader, None)  # Пропуск заголовка
         for row in reader:
-            if row and int(row[0]) == user_id:
-                return {"fio": row[1], "group": row[2]}
+            if row and int(row) == user_id:
+                return {"fio": row, "group": row}
     return None
 
 # Удаление студента из базы при изменении данных
@@ -68,9 +68,9 @@ def delete_student_data(user_id):
     
     with open(CSV_STUDENTS, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(rows[0])  # Восстанавливаем заголовок
+        writer.writerow(rows)  # Восстанавливаем заголовок
         for row in rows[1:]:
-            if row and int(row[0]) != user_id:
+            if row and int(row) != user_id:
                 writer.writerow(row)
 
 # Определение текущей пары ДВФУ с границами (08:15 - 18:20)
@@ -260,4 +260,4 @@ async def process_attendance(callback: CallbackQuery):
 async def cmd_report(message: Message):
     user_username = message.from_user.username or ""
     
-    # Полностью безопасная проверка без возможности сдвига блоков
+    if user_username.lower() != STAROSTA_USERNAME.lower():
