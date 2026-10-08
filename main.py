@@ -7,17 +7,17 @@ import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
-
-# Новая часть для работы на бесплатном тарифе Render:
 from aiohttp import web
+
+# Фоновый веб-сервер для заглушки бесплатного тарифа Render
 async def handle(request):
     return web.Response(text="Bot is running!")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CSV_FILE = "attendance.csv"
 
-# Настройка таймзоны Владивостока (UTC+10)
-VLADIVOSTOK_TZ = timezone(timedelta(hours=10))
+# Настройка таймзоны Владивостока (UTC+10) для точного времени ДВФУ
+VLADIVOSTOK_TZ = timezone(offset=timedelta(hours=10))
 
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
@@ -65,10 +65,9 @@ async def cmd_start(message: Message):
     pair_status = get_current_pair_text()
     await message.answer(
         text=f"Привет, {message.from_user.full_name}!\n"
-             f"🏫 Текущий слот: **{pair_status}**\n\n"
+             f"🏫 Текущий слот: {pair_status}\n\n"
              f"Выбери свою подгруппу для отметки присутствия:",
-        reply_markup=get_group_keyboard(),
-        parse_mode="Markdown"
+        reply_markup=get_group_keyboard()
     )
 
 @dp.message(Command("report"))
@@ -81,7 +80,9 @@ async def cmd_report(message: Message):
 
 @dp.callback_query(F.data.startswith("group_"))
 async def process_group(callback: CallbackQuery):
-    group_num = callback.data.split("_")[1] 
+    parts = callback.data.split("_")
+    group_num = parts[1] if len(parts) > 1 else "Неизвестно"
+    
     pair_status = get_current_pair_text()
     
     now_vlad = datetime.now(VLADIVOSTOK_TZ)
@@ -97,16 +98,14 @@ async def process_group(callback: CallbackQuery):
         writer.writerow([date_str, time_str, user_id, username, full_name, f"Подгруппа {group_num}", pair_status])
 
     await callback.message.edit_text(
-        text=f"✅ **Присутствие успешно отмечено!**\n\n"
-             f"📅 **Дата/Время:** {date_str} {time_str} (ВЛВ)\n"
-             f"👥 **Подгруппа:** {group_num}\n"
-             f"📖 **Пара:** {pair_status}\n"
-             f"👤 **Студент:** {full_name}",
-        parse_mode="Markdown"
+        text=f"✅ Присутствие успешно отмечено!\n\n"
+             f"📅 Дата/Время: {date_str} {time_str} (ВЛВ)\n"
+             f"👥 Подгруппа: {group_num}\n"
+             f"📖 Пара: {pair_status}\n"
+             f"👤 Студент: {full_name}"
     )
 
 async def main():
-    # Запуск параллельного веб-сервера для заглушки Render
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
@@ -114,7 +113,6 @@ async def main():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     
-    # Запускаем сайт в фоне и стартуем бота
     asyncio.create_task(site.start())
     await dp.start_polling(bot)
 
