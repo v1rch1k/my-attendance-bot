@@ -264,8 +264,8 @@ if __name__ == "__main__":
     app = web.Application()
     app.router.add_get('/', handle)
     
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     loop.create_task(start_bot())
-    
     port = int(os.environ.get("PORT", 10000))
     web.run_app(app, host='0.0.0.0', port=port)
