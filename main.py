@@ -46,8 +46,8 @@ def get_student_data(user_id):
         reader = csv.reader(f)
         next(reader, None)
         for row in reader:
-            if row and int(row[0]) == user_id:
-                return {"fio": row[1], "group": row[2]}
+            if row and int(row) == user_id:
+                return {"fio": row, "group": row}
     return None
 
 def delete_student_data(user_id):
@@ -60,9 +60,9 @@ def delete_student_data(user_id):
     
     with open(CSV_STUDENTS, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(rows[0])
+        writer.writerow(rows)
         for row in rows[1:]:
-            if row and int(row[0]) != user_id:
+            if row and int(row) != user_id:
                 writer.writerow(row)
 
 def get_current_pair_text():
@@ -103,32 +103,37 @@ def get_attendance_keyboard():
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    user_username = message.from_user.username or ""
+    is_starosta = user_username.lower() == STAROSTA_USERNAME.lower()
+    
     student = get_student_data(user_id)
     
     if not student:
         await message.answer(
             "👋 Привет! Пройди быструю регистрацию для журнала старосты.\n\n"
-            "Шаг 1: **Введи ...**"
+            "Шаг 1: **Введи Фамилию и Имя** через пробел (например: *Петров Алексей*):"
         )
         await state.set_state(Registration.waiting_for_fio)
         return
 
     pair_status = get_current_pair_text()
     
-    if not pair_status:
+    if not pair_status and not is_starosta:
         await message.answer(
             text=f"👤 **Профиль:** {student['fio']} (Подгруппа {student['group']})\n"
                  f"🌙 **Статус:** Прием отметок закрыт.\n\n"
-                 f"🔒 Фиксировать присутствие можно только в учебные часы (с 08:15 до 18:20).",
+                 f"🔒 Пояснение: Учебное время на сегодня закончилось (или еще не началось). "
+                 f"Бот принимает отметки строго в часы занятий ДВФУ с 08:15 до 18:20. Отдохните!",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⚙️ Сменить подгруппу / ФИО", callback_data="edit_profile")]
             ])
         )
         return
 
+    display_pair = pair_status if pair_status else "Внеучебное время (Режим старосты 👑)"
     await message.answer(
         text=f"👤 **Профиль:** {student['fio']} (Подгруппа {student['group']})\n"
-             f"🏫 **Текущий слот:** {pair_status}\n\n"
+             f"🏫 **Текущий слот:** {display_pair}\n\n"
              f"Нажмите кнопку ниже, чтобы зафиксировать присутствие:",
         reply_markup=get_attendance_keyboard()
     )
@@ -167,7 +172,7 @@ async def process_fio(message: Message, state: FSMContext):
 @dp.callback_query(Registration.waiting_for_group, F.data.startswith("reg_group_"))
 async def process_reg_group(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
-    group_num = parts[2] if len(parts) > 2 else "1"
+    group_num = parts if len(parts) > 2 else "1"
     user_data = await state.get_data()
     fio = user_data.get("chosen_fio")
     user_id = callback.from_user.id
@@ -179,7 +184,10 @@ async def process_reg_group(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     pair_status = get_current_pair_text()
     
-    if not pair_status:
+    user_username = callback.from_user.username or ""
+    is_starosta = user_username.lower() == STAROSTA_USERNAME.lower()
+    
+    if not pair_status and not is_starosta:
         await callback.message.edit_text(
             text=f"🎉 Регистрация успешно завершена!\n\n"
                  f"👤 Профиль: **{fio}**\n"
@@ -191,11 +199,12 @@ async def process_reg_group(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    display_pair = pair_status if pair_status else "Внеучебное время (Режим старосты 👑)"
     await callback.message.edit_text(
         text=f"🎉 Регистрация успешно завершена!\n\n"
                  f"👤 Профиль: **{fio}**\n"
                  f"👥 Подгруппа: **{group_num}**\n"
-                 f"🏫 Текущий слот: {pair_status}\n\n"
+                 f"🏫 Текущий слот: {display_pair}\n\n"
                  f"Теперь вы можете отмечаться одной большой кнопкой:",
         reply_markup=get_attendance_keyboard()
     )
@@ -203,6 +212,9 @@ async def process_reg_group(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "mark_me")
 async def process_attendance(callback: CallbackQuery):
     user_id = callback.from_user.id
+    user_username = callback.from_user.username or ""
+    is_starosta = user_username.lower() == STAROSTA_USERNAME.lower()
+    
     student = get_student_data(user_id)
     
     if not student:
@@ -211,7 +223,7 @@ async def process_attendance(callback: CallbackQuery):
 
     pair_status = get_current_pair_text()
     
-    if not pair_status:
+    if not pair_status and not is_starosta:
         await callback.answer("🔒 Время приема отметок вышло (после 18:20)!", show_alert=True)
         await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⚙️ Сменить подгруппу / ФИО", callback_data="edit_profile")]
@@ -224,17 +236,18 @@ async def process_attendance(callback: CallbackQuery):
     
     username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
     tg_name = callback.from_user.full_name
+    display_pair = pair_status if pair_status else "Внеурочная отметка старосты"
 
     with open(CSV_ATTENDANCE, mode='a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow([date_str, time_str, user_id, username, tg_name, student['fio'], f"Подгруппа {student['group']}", pair_status])
+        writer.writerow([date_str, time_str, user_id, username, tg_name, student['fio'], f"Подгруппа {student['group']}", display_pair])
 
     await callback.message.edit_text(
         text=f"✅ **Присутствие успешно отмечено!**\n\n"
              f"📅 Дата/Время: {date_str} {time_str} (ВЛВ)\n"
              f"👤 Студент: {student['fio']}\n"
              f"👥 Подгруппа: {student['group']}\n"
-             f"📖 Пара: {pair_status}\n\n"
+             f"📖 Пара: {display_pair}\n\n"
              f"Запись внесена в общий файл журнала.",
         reply_markup=get_attendance_keyboard()
     )
@@ -267,5 +280,6 @@ if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(start_bot())
+    
     port = int(os.environ.get("PORT", 10000))
     web.run_app(app, host='0.0.0.0', port=port)
