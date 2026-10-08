@@ -53,8 +53,8 @@ def get_student_data(user_id):
         reader = csv.reader(f)
         next(reader, None)  # Пропуск заголовка
         for row in reader:
-            if row and int(row) == user_id:
-                return {"fio": row, "group": row}
+            if row and int(row[0]) == user_id:
+                return {"fio": row[1], "group": row[2]}
     return None
 
 # Удаление студента из базы при изменении данных
@@ -68,12 +68,12 @@ def delete_student_data(user_id):
     
     with open(CSV_STUDENTS, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(rows)  # Заголовок
+        writer.writerow(rows[0])  # Восстанавливаем заголовок
         for row in rows[1:]:
-            if row and int(row) != user_id:
+            if row and int(row[0]) != user_id:
                 writer.writerow(row)
 
-# Определение текущей пары ДВФУ с новыми границами (08:15 - 18:20)
+# Определение текущей пары ДВФУ с границами (08:15 - 18:20)
 def get_current_pair_text():
     now_vlad = datetime.now(VLADIVOSTOK_TZ)
     current_time = now_vlad.time()
@@ -83,7 +83,6 @@ def get_current_pair_text():
         end = datetime.strptime(end_str, "%H:%M").time()
         return start <= current_time <= end
 
-    # Разрешаем вход с 08:15 на первую пару
     if time_in_range("08:15", "10:00"):
         return "1 пара"
     elif time_in_range("10:10", "11:40"):
@@ -94,7 +93,6 @@ def get_current_pair_text():
         return "4 пара"
     elif time_in_range("15:10", "16:40"):
         return "5 пара"
-    # 18:20 — финальный конец 6-й пары (на одну пару раньше исходного)
     elif time_in_range("16:50", "18:20"):
         return "6 пара"
     else:
@@ -129,7 +127,6 @@ async def cmd_start(message: Message, state: FSMContext):
 
     pair_status = get_current_pair_text()
     
-    # Блокировка, если время вышло (после 18:20) или еще не началось (до 08:15)
     if not pair_status:
         await message.answer(
             text=f"👤 **Профиль:** {student['fio']} (Подгруппа {student['group']})\n"
@@ -190,7 +187,6 @@ async def process_reg_group(callback: CallbackQuery, state: FSMContext):
     fio = user_data.get("chosen_fio")
     user_id = callback.from_user.id
     
-    # Сохраняем в базу студентов
     with open(CSV_STUDENTS, mode='a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow([user_id, fio, group_num])
@@ -231,7 +227,6 @@ async def process_attendance(callback: CallbackQuery):
 
     pair_status = get_current_pair_text()
     
-    # Проверка лимита времени в момент клика
     if not pair_status:
         await callback.answer("🔒 Время приема отметок вышло (после 18:20)!", show_alert=True)
         await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -260,3 +255,9 @@ async def process_attendance(callback: CallbackQuery):
         reply_markup=get_attendance_keyboard()
     )
 
+# Команда /report для старосты
+@dp.message(Command("report"))
+async def cmd_report(message: Message):
+    user_username = message.from_user.username
+    
+    if user_username and user_username.lower() == STAROSTA_USERNAME.lower():
