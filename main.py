@@ -8,15 +8,16 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
 
-# Токен берем из настроек сервера для безопасности
+# Новая часть для работы на бесплатном тарифе Render:
+from aiohttp import web
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CSV_FILE = "/data/attendance.csv"
+CSV_FILE = "attendance.csv"
 
 # Настройка таймзоны Владивостока (UTC+10)
 VLADIVOSTOK_TZ = timezone(timedelta(hours=10))
-
-# Создаем папку для данных, если её нет
-os.makedirs("/data", exist_ok=True)
 
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
@@ -105,6 +106,16 @@ async def process_group(callback: CallbackQuery):
     )
 
 async def main():
+    # Запуск параллельного веб-сервера для заглушки Render
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    
+    # Запускаем сайт в фоне и стартуем бота
+    asyncio.create_task(site.start())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
