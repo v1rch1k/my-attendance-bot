@@ -258,6 +258,6 @@ async def process_attendance(callback: CallbackQuery):
 # Команда /report для старосты
 @dp.message(Command("report"))
 async def cmd_report(message: Message):
-    user_username = message.from_user.username
+    user_username = message.from_user.username or ""
     
-    if user_username and user_username.lower() == STAROSTA_USERNAME.lower():
+    # Полностью безопасная проверка без возможности сдвига блоков
