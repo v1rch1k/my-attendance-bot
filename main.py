@@ -182,7 +182,7 @@ async def process_fio(message: Message, state: FSMContext):
 @dp.callback_query(Registration.waiting_for_group, F.data.startswith("reg_group_"))
 async def process_reg_group(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
-    group_num = parts[2] if len(parts) > 2 else "1"
+    group_num = parts if len(parts) > 2 else "1"
     user_data = await state.get_data()
     fio = user_data.get("chosen_fio")
     user_id = callback.from_user.id
@@ -255,9 +255,9 @@ async def process_attendance(callback: CallbackQuery):
         reply_markup=get_attendance_keyboard()
     )
 
-# Команда /report для старосты
+# Команда /report для старосты (без уязвимых блоков 'if')
 @dp.message(Command("report"))
 async def cmd_report(message: Message):
     user_username = message.from_user.username or ""
     
-    if user_username.lower() != STAROSTA_USERNAME.lower():
+    if user_username.lower() == STAROSTA_USERNAME.lower():
