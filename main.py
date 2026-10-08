@@ -255,7 +255,7 @@ async def process_attendance(callback: CallbackQuery):
 @dp.message(Command("report"))
 async def cmd_report(message: Message):
     user_username = message.from_user.username or ""
-    
+    # Теперь бот сам переведет твой никнейм в маленькие буквы перед проверкой!
     if user_username.lower() == STAROSTA_USERNAME.lower():
         if os.path.exists(CSV_ATTENDANCE):
             document = FSInputFile(CSV_ATTENDANCE)
